@@ -183,10 +183,11 @@ def main():
     
     bot = st.session_state.bot
     
-    # Progress Bar - EINFACH & SICHER
-    progress = max(0.0, min(1.0, bot.current_field / 15.0))
-    st.progress(progress)
-    st.metric("Schritt", f"{bot.current_field + 1} von 15")
+    # Progress Bar - nur während Eingabe anzeigen
+    if bot.current_field < 15:
+        progress = max(0.0, min(1.0, bot.current_field / 15.0))
+        st.progress(progress)
+        st.metric("Schritt", f"{bot.current_field + 1} von 15")
     
     # Sidebar
     with st.sidebar:
@@ -242,32 +243,94 @@ def main():
     else:
         st.success("🎉 Alle Daten erfasst!")
         
-        st.subheader("📋 Übersicht")
-        for field in bot.fields:
-            value = bot.data.get(field['name'], "—")
-            display_value = bot.get_display_value(field['name'], value)
-            st.metric(field['label'], display_value)
+        # Session State für Bearbeitung initialisieren
+        if "edit_field" not in st.session_state:
+            st.session_state.edit_field = None
         
-        if st.button("📄 Dokumente erstellen", type="primary"):
-            bot.create_documents()
-            st.balloons()
-            st.success("Dokumente bereit!")
-        
-        col1, col2 = st.columns(2)
-        if bot.word_content:
-            col1.download_button(
-                label="📝 Word",
-                data=bot.word_content,
-                file_name=f"ESG-Auftrag_{datetime.now().strftime('%d%m%Y_%H%M')}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            )
-        if bot.excel_content:
-            col2.download_button(
-                label="📊 Excel",
-                data=bot.excel_content,
-                file_name=f"ESG-Eingabe_{datetime.now().strftime('%d%m%Y_%H%M')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+        # Wenn kein Feld in Bearbeitung ist, Übersicht anzeigen
+        if st.session_state.edit_field is None:
+            st.subheader("📋 Übersicht")
+            for field in bot.fields:
+                value = bot.data.get(field['name'], "—")
+                display_value = bot.get_display_value(field['name'], value)
+                col1, col2 = st.columns([4, 1])
+                with col1:
+                    st.metric(field['label'], display_value)
+                with col2:
+                    if st.button("✏️ Bearbeiten", key=f"edit_{field['name']}"):
+                        st.session_state.edit_field = field['name']
+                        st.rerun()
+            
+            st.divider()
+            if st.button("📄 Dokumente erstellen", type="primary"):
+                bot.create_documents()
+                st.balloons()
+                st.success("Dokumente bereit!")
+            
+            col1, col2 = st.columns(2)
+            if bot.word_content:
+                col1.download_button(
+                    label="📝 Word",
+                    data=bot.word_content,
+                    file_name=f"ESG-Auftrag_{datetime.now().strftime('%d%m%Y_%H%M')}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
+            if bot.excel_content:
+                col2.download_button(
+                    label="📊 Excel",
+                    data=bot.excel_content,
+                    file_name=f"ESG-Eingabe_{datetime.now().strftime('%d%m%Y_%H%M')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+        else:
+            # Feld wird bearbeitet
+            field_name = st.session_state.edit_field
+            field = next((f for f in bot.fields if f['name'] == field_name), None)
+            
+            if field:
+                st.subheader(f"✏️ Bearbeite: {field['label']}")
+                st.divider()
+                
+                # Ausformulierte Frage anzeigen
+                st.markdown(f"### ❓ {field['detailed_question']}")
+                st.divider()
+                
+                # Spezielle Behandlung für Fertigstellungstermin mit Kalender
+                if field['name'] == "fertigstellungstermin":
+                    current_value = bot.data.get(field['name'], date.today())
+                    try:
+                        current_date = datetime.strptime(current_value, "%d.%m.%Y").date()
+                    except:
+                        current_date = date.today()
+                    
+                    selected_date = st.date_input(
+                        "📅 Fertigstellungsdatum wählen (TT.MM.JJJJ):",
+                        value=current_date,
+                        min_value=date.today(),
+                        format="DD.MM.YYYY",
+                        key="date_picker_edit"
+                    )
+                    user_input = selected_date.strftime("%d.%m.%Y") if selected_date else ""
+                    if user_input:
+                        st.info(f"✅ Gewähltes Datum: **{user_input}**")
+                else:
+                    current_value = bot.data.get(field['name'], "")
+                    user_input = st.text_input("Neue Eingabe:", value=current_value, placeholder=field['question'], key="edit_input")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("✅ Speichern", type="primary"):
+                        if bot.validate(field['name'], user_input):
+                            bot.data[field['name']] = user_input
+                            st.session_state.edit_field = None
+                            st.success("✓ Änderungen gespeichert!")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Format prüfen: {field['question']}")
+                with col2:
+                    if st.button("❌ Abbrechen"):
+                        st.session_state.edit_field = None
+                        st.rerun()
 
 if __name__ == "__main__":
     main()
