@@ -11,6 +11,30 @@ class ESGScoringBot:
     def __init__(self):
         self.data = {}
         self.current_field = 0
+        # Mappings für die Bedeutungen der Zahlenwerte
+        self.value_mappings = {
+            "korruptionsrisiko": {
+                "1": "Erhöhtes Risiko",
+                "2": "Leicht erhöhtes Risiko",
+                "3": "Nein, keine Hinweise oder normales Risiko",
+                "4": "Leicht verringertes Risiko",
+                "5": "Geringes Risiko",
+                "6": "Die Information liegt nicht vor."
+            },
+            "unternehmensfuehrung": {
+                "1": "Besser als der Durchschnitt",
+                "2": "Etwas über Durchschnitt",
+                "3": "Durchschnitt",
+                "4": "Etwas unter Durchschnitt",
+                "5": "Unter Durchschnitt",
+                "6": "Die Information liegt nicht vor."
+            },
+            "esgg_verknuepfung": {
+                "1": "Ja",
+                "2": "Nein, wird nicht benötigt",
+                "3": "Nein, ist noch anzulegen"
+            }
+        }
         self.fields = [
             {"name": "kd_esgg", "label": "KD bzw. KD ESGG", "question": "3-6 stellige Nummer", "detailed_question": "Für welche KD soll das ESG-Scoring angelegt werden?"},
             {"name": "kurzbezeichnung", "label": "Kurzbezeichnung", "question": "Gemäß Kreda", "detailed_question": "Wie lautet die Kurzbezeichnung des Unternehmens (gemäß Kreda)?"},
@@ -21,12 +45,12 @@ class ESGScoringBot:
             {"name": "umsatz_teur", "label": "Umsatz TEUR", "question": "Positive Zahl", "detailed_question": "Wie hoch ist der Umsatz des Unternehmens (in TEUR)?"},
             {"name": "bilanzsumme_teur", "label": "Bilanzsumme", "question": "Positive Zahl", "detailed_question": "Wie hoch ist die Bilanzsumme (in TEUR)?"},
             {"name": "sonstiges", "label": "Sonstiges", "question": "Optional", "detailed_question": "Gibt es weitere Informationen, die relevant sind (optional)?"},
-            {"name": "korruptionsrisiko", "label": "Korruptionsrisiko", "question": "1-6 wählen", "detailed_question": "Wie bewerten Sie das Korruptionsrisiko? (1=sehr niedrig, 6=sehr hoch)"},
+            {"name": "korruptionsrisiko", "label": "Korruptionsrisiko", "question": "1-6 wählen", "detailed_question": "Wie bewerten Sie das Korruptionsrisiko?\n\n1 = Erhöhtes Risiko\n2 = Leicht erhöhtes Risiko\n3 = Nein, keine Hinweise oder normales Risiko\n4 = Leicht verringertes Risiko\n5 = Geringes Risiko\n6 = Die Information liegt nicht vor."},
             {"name": "begruendung_korruptionsrisiko", "label": "Begründung Korruption", "question": "Erklären", "detailed_question": "Bitte begründen Sie Ihre Bewertung zum Korruptionsrisiko."},
-            {"name": "unternehmensfuehrung", "label": "Unternehmensführung", "question": "1-6 wählen", "detailed_question": "Wie bewerten Sie die Unternehmensführung? (1=sehr schwach, 6=sehr stark)"},
+            {"name": "unternehmensfuehrung", "label": "Unternehmensführung", "question": "1-6 wählen", "detailed_question": "Wie bewerten Sie die Unternehmensführung?\n\n1 = Besser als der Durchschnitt\n2 = Etwas über Durchschnitt\n3 = Durchschnitt\n4 = Etwas unter Durchschnitt\n5 = Unter Durchschnitt\n6 = Die Information liegt nicht vor."},
             {"name": "begruendung_unternehmensfuehrung", "label": "Begründung Führung", "question": "Erklären", "detailed_question": "Bitte begründen Sie Ihre Bewertung der Unternehmensführung."},
-            {"name": "esgg_verknuepfung", "label": "ESGG-Verknüpfung", "question": "1-3 wählen", "detailed_question": "Wie stark ist die ESGG-Verknüpfung? (1=niedrig, 2=mittel, 3=hoch)"},
-            {"name": "esgg_betroffene_kds", "label": "Betroffene KDs", "question": "3-6 stellige KD-Nummern (komma-getrennt)", "detailed_question": "Welche KD-Nummern (3-6 stellig) sind von der ESSG-Verkünpfung betroffen? (komma- oder leerzeichen-getrennt)"}
+            {"name": "esgg_verknuepfung", "label": "ESGG-Verknüpfung", "question": "1-3 wählen", "detailed_question": "Ist eine ESG-Verknüpfung angelegt worden?\n\n1 = Ja\n2 = Nein, wird nicht benötigt\n3 = Nein, ist noch anzulegen"},
+            {"name": "esgg_betroffene_kds", "label": "Betroffene KDs", "question": "3-6 stellige KD-Nummern (komma-getrennt)", "detailed_question": "Bitte ESG-Verknüpfung anlegen für folgende KDs"}
         ]
         self.word_content = None
         self.excel_content = None
@@ -70,6 +94,42 @@ class ESGScoringBot:
             return True
         return True
     
+    def get_field_label(self, field_name):
+        """Gibt aussagekräftige Labels für Feldnamen zurück"""
+        labels = {
+            "kd_esgg": "KD bzw. Kundennummer ESGG",
+            "kurzbezeichnung": "Kurzbezeichnung",
+            "leit_kd": "Leit-KD (Digi-Akte Nummer)",
+            "fertigstellungstermin": "Fertigstellungstermin",
+            "kurze_begruendung": "Begründung",
+            "mitarbeiter_anzahl": "Mitarbeiteranzahl",
+            "umsatz_teur": "Umsatz (TEUR)",
+            "bilanzsumme_teur": "Bilanzsumme (TEUR)",
+            "sonstiges": "Sonstiges",
+            "korruptionsrisiko": "Korruptionsrisiko",
+            "begruendung_korruptionsrisiko": "Begründung Korruptionsrisiko",
+            "unternehmensfuehrung": "Unternehmensführung",
+            "begruendung_unternehmensfuehrung": "Begründung Unternehmensführung",
+            "esgg_verknuepfung": "ESG-Verknüpfung",
+            "esgg_betroffene_kds": "Betroffene Kundennummern"
+        }
+        return labels.get(field_name, field_name.replace('_', ' ').title())
+    
+    def get_display_value(self, field_name, value):
+        """Übersetzt Zahlenwerte in ihre Bedeutungen und formatiert Tausenderpunkte"""
+        if field_name in self.value_mappings:
+            return self.value_mappings[field_name].get(value, value)
+        
+        # Tausenderpunkte für numerische Felder
+        if field_name in ["mitarbeiter_anzahl", "umsatz_teur", "bilanzsumme_teur"]:
+            try:
+                num = float(value)
+                return f"{num:,.0f}".replace(",", ".")
+            except (ValueError, TypeError):
+                return value
+        
+        return value
+    
     def create_documents(self):
         timestamp = datetime.now().strftime("%d%m%Y_%H%M")
         
@@ -89,17 +149,29 @@ class ESGScoringBot:
             doc.add_heading(section, level=1)
             for field in fields:
                 value = self.data.get(field, "—")
-                doc.add_paragraph(f"{field.replace('_', ' ').title()}: {value}")
+                display_value = self.get_display_value(field, value)
+                field_label = self.get_field_label(field)
+                doc.add_paragraph(f"{field_label}: {display_value}")
         
         doc_io = io.BytesIO()
         doc.save(doc_io)
         doc_io.seek(0)
         self.word_content = doc_io.getvalue()
         
-        df = pd.DataFrame(list(self.data.items()), columns=["Feld", "Wert"])
+        # Excel mit übersetzten Werten und besseren Feldnamen erstellen
+        display_data = {}
+        for key, value in self.data.items():
+            field_label = self.get_field_label(key)
+            display_value = self.get_display_value(key, value)
+            display_data[field_label] = display_value
+        df = pd.DataFrame(list(display_data.items()), columns=["Feld", "Wert"])
         excel_io = io.BytesIO()
         with pd.ExcelWriter(excel_io, engine="openpyxl") as writer:
             df.to_excel(writer, sheet_name="ESG-Eingabe", index=False)
+            # Spaltenbreiten anpassen
+            worksheet = writer.sheets["ESG-Eingabe"]
+            worksheet.column_dimensions['A'].width = 40
+            worksheet.column_dimensions['B'].width = 50
         excel_io.seek(0)
         self.excel_content = excel_io.getvalue()
 
@@ -151,7 +223,14 @@ def main():
             if st.button("✅ Speichern & Weiter", type="primary"):
                 if bot.validate(field['name'], user_input):
                     bot.data[field['name']] = user_input
-                    bot.current_field += 1
+                    # Wenn Korruptionsrisiko = 3 oder Unternehmensführung = 3, nächste Frage (Begründung) überspringen
+                    if (field['name'] == 'korruptionsrisiko' and user_input == '3') or (field['name'] == 'unternehmensfuehrung' and user_input == '3'):
+                        bot.current_field += 2
+                    # Wenn ESG-Verknüpfung = 1 oder 2, nächste Frage (betroffene KDs) überspringen
+                    elif field['name'] == 'esgg_verknuepfung' and user_input in ['1', '2']:
+                        bot.current_field += 2
+                    else:
+                        bot.current_field += 1
                     st.success("✓ Gespeichert!")
                     st.rerun()
                 else:
@@ -165,7 +244,9 @@ def main():
         
         st.subheader("📋 Übersicht")
         for field in bot.fields:
-            st.metric(field['label'], bot.data.get(field['name'], "—"))
+            value = bot.data.get(field['name'], "—")
+            display_value = bot.get_display_value(field['name'], value)
+            st.metric(field['label'], display_value)
         
         if st.button("📄 Dokumente erstellen", type="primary"):
             bot.create_documents()
