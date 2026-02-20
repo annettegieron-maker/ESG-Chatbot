@@ -1,9 +1,13 @@
 import streamlit as st
 import pandas as pd
 from docx import Document
+from docx.shared import Pt, RGBColor
 import io
 import re
+import os
+import shutil
 from datetime import datetime, date
+from urllib.parse import quote
 
 st.set_page_config(page_title="ESG-Scoring", layout="wide")
 
@@ -11,6 +15,8 @@ class ESGScoringBot:
     def __init__(self):
         self.data = {}
         self.current_field = 0
+        self.uploaded_files = []  # Liste für hochgeladene Dateien
+        self.upload_folder = None  # Ordner für Dateien
         # Mappings für die Bedeutungen der Zahlenwerte
         self.value_mappings = {
             "korruptionsrisiko": {
@@ -36,6 +42,8 @@ class ESGScoringBot:
             }
         }
         self.fields = [
+            {"name": "vorname", "label": "Vorname", "question": "Vorname", "detailed_question": "Bitte gib Deinen Vornamen an."},
+            {"name": "nachname", "label": "Nachname", "question": "Nachname", "detailed_question": "Bitte gib Deinen Nachnamen an."},
             {"name": "kd_esgg", "label": "KD bzw. KD ESGG", "question": "3-6 stellige Nummer", "detailed_question": "Für welche KD soll das ESG-Scoring angelegt werden?"},
             {"name": "kurzbezeichnung", "label": "Kurzbezeichnung", "question": "Gemäß Kreda", "detailed_question": "Wie lautet die Kurzbezeichnung des Unternehmens (gemäß Kreda)?"},
             {"name": "leit_kd", "label": "Leit-KD", "question": "Digi-Akte Nummer", "detailed_question": "Was ist die Leit-KD (Digi-Akte Nummer)?"},
@@ -44,7 +52,7 @@ class ESGScoringBot:
             {"name": "mitarbeiter_anzahl", "label": "Mitarbeiter", "question": "Positive Zahl", "detailed_question": "Wie viele Mitarbeiter hat das Unternehmen?"},
             {"name": "umsatz_teur", "label": "Umsatz TEUR", "question": "Positive Zahl", "detailed_question": "Wie hoch ist der Umsatz des Unternehmens (in TEUR)?"},
             {"name": "bilanzsumme_teur", "label": "Bilanzsumme", "question": "Positive Zahl", "detailed_question": "Wie hoch ist die Bilanzsumme (in TEUR)?"},
-            {"name": "sonstiges", "label": "Sonstiges", "question": "Optional", "detailed_question": "Gibt es weitere Informationen, die relevant sind (optional)?"},
+            {"name": "sonstiges", "label": "ESG-relevante Dokumente", "question": "Dateien hochladen", "detailed_question": "Bitte lade hier ESG-relevante Dokumente hoch (z.B. Nachhaltigkeitsberichte, Zertifikate, Richtlinien, etc.). Dies ist optional."},
             {"name": "korruptionsrisiko", "label": "Korruptionsrisiko", "question": "1-6 wählen", "detailed_question": "Wie bewerten Sie das Korruptionsrisiko?\n\n1 = Erhöhtes Risiko\n2 = Leicht erhöhtes Risiko\n3 = Nein, keine Hinweise oder normales Risiko\n4 = Leicht verringertes Risiko\n5 = Geringes Risiko\n6 = Die Information liegt nicht vor."},
             {"name": "begruendung_korruptionsrisiko", "label": "Begründung Korruption", "question": "Erklären", "detailed_question": "Bitte begründen Sie Ihre Bewertung zum Korruptionsrisiko."},
             {"name": "unternehmensfuehrung", "label": "Unternehmensführung", "question": "1-6 wählen", "detailed_question": "Wie bewerten Sie die Unternehmensführung?\n\n1 = Besser als der Durchschnitt\n2 = Etwas über Durchschnitt\n3 = Durchschnitt\n4 = Etwas unter Durchschnitt\n5 = Unter Durchschnitt\n6 = Die Information liegt nicht vor."},
@@ -57,10 +65,16 @@ class ESGScoringBot:
     
     def validate(self, field_name, value):
         if not value or not value.strip(): 
+            # Für "sonstiges" ist optional, auch wenn Dateien hochgeladen sind
+            if field_name == "sonstiges":
+                return True
             return field_name == "sonstiges"
         value = value.strip()
         
-        if field_name in ["kd_esgg", "leit_kd"]:
+        if field_name in ["vorname", "nachname"]:
+            # Nur Buchstaben, Bindestrich und Leerzeichen erlaubt
+            return bool(re.match(r"^[a-zA-ZäöüßÄÖÜ\s\-]+$", value)) and len(value) >= 2
+        elif field_name in ["kd_esgg", "leit_kd"]:
             return bool(re.match(r"^\d{3,6}$", value))
         elif field_name == "fertigstellungstermin":
             # Das Datum kommt bereits im Format TT.MM.JJJJ vom Kalender
@@ -97,6 +111,8 @@ class ESGScoringBot:
     def get_field_label(self, field_name):
         """Gibt aussagekräftige Labels für Feldnamen zurück"""
         labels = {
+            "vorname": "Vorname",
+            "nachname": "Nachname",
             "kd_esgg": "KD bzw. Kundennummer ESGG",
             "kurzbezeichnung": "Kurzbezeichnung",
             "leit_kd": "Leit-KD (Digi-Akte Nummer)",
@@ -105,7 +121,7 @@ class ESGScoringBot:
             "mitarbeiter_anzahl": "Mitarbeiteranzahl",
             "umsatz_teur": "Umsatz (TEUR)",
             "bilanzsumme_teur": "Bilanzsumme (TEUR)",
-            "sonstiges": "Sonstiges",
+            "sonstiges": "ESG-relevante Dokumente",
             "korruptionsrisiko": "Korruptionsrisiko",
             "begruendung_korruptionsrisiko": "Begründung Korruptionsrisiko",
             "unternehmensfuehrung": "Unternehmensführung",
@@ -130,12 +146,70 @@ class ESGScoringBot:
         
         return value
     
+    def save_uploaded_files(self, kd_esgg):
+        """Erstellt Ordner für Dateien und speichert diese"""
+        if not self.uploaded_files:
+            return None
+        
+        # Ordner erstellen: uploads/KD_XXXX/
+        self.upload_folder = f"uploads/KD_{kd_esgg}"
+        os.makedirs(self.upload_folder, exist_ok=True)
+        
+        saved_files = []
+        for uploaded_file in self.uploaded_files:
+            file_path = os.path.join(self.upload_folder, uploaded_file.name)
+            with open(file_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+            saved_files.append((uploaded_file.name, file_path))
+        
+        return saved_files
+    
+    def generate_email_link(self):
+        """Generiert einen mailto-Link mit vorgedefinierten Daten"""
+        vorname = self.data.get('vorname', '')
+        kd_esgg = self.data.get('kd_esgg', '')
+        kurzbezeichnung = self.data.get('kurzbezeichnung', '')
+        
+        to = "esg-scoring@ikb.de"
+        subject = f"ESG-Scoring Auftrag für KD {kd_esgg}"
+        
+        body = f"""Liebes ESG-Scoring-Team,
+
+anbei sende ich Euch den Scoring-Auftrag für KD {kd_esgg} ({kurzbezeichnung}) mit der Bitte um Bearbeitung.
+
+Bitte meldet Euch, wenn Ihr Rückfragen habt.
+
+Viele Grüße
+{vorname}"""
+        
+        # URL-Encoding für mailto
+        mailto_link = f"mailto:{to}?subject={quote(subject)}&body={quote(body)}"
+        return mailto_link
+    
     def create_documents(self):
         timestamp = datetime.now().strftime("%d%m%Y_%H%M")
         
+        # E-Mail-Adresse generieren
+        vorname = self.data.get('vorname', '').lower().strip()
+        nachname = self.data.get('nachname', '').lower().strip()
+        email = f"{vorname}.{nachname}@ikb.de" if vorname and nachname else "E-Mail nicht verfügbar"
+        
+        # KD-ESGG auslesen
+        kd_esgg = self.data.get('kd_esgg', 'N/A')
+        
         doc = Document()
-        doc.add_heading("ESG-Scoring Auftrag", 0)
+        doc.add_heading(f"ESG-Auftrag für KD {kd_esgg}", 0)
+        doc.add_paragraph(f"Auftraggeber: {email}")
         doc.add_paragraph(f"Erfassungsdatum: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+        
+        # Hochgeladene Dateien speichern und hinzufügen
+        if self.uploaded_files:
+            saved_files = self.save_uploaded_files(kd_esgg)
+            if saved_files:
+                doc.add_heading("Anhänge", level=2)
+                for file_name, file_path in saved_files:
+                    # Link zur Datei hinzufügen
+                    doc.add_paragraph(f"📎 {file_name} → {file_path}", style='List Bullet')
         
         sections = {
             "KUNDENDATEN": ["kd_esgg", "kurzbezeichnung", "leit_kd", "fertigstellungstermin", "kurze_begruendung"],
@@ -158,20 +232,18 @@ class ESGScoringBot:
         doc_io.seek(0)
         self.word_content = doc_io.getvalue()
         
-        # Excel mit übersetzten Werten und besseren Feldnamen erstellen
-        display_data = {}
-        for key, value in self.data.items():
-            field_label = self.get_field_label(key)
-            display_value = self.get_display_value(key, value)
-            display_data[field_label] = display_value
-        df = pd.DataFrame(list(display_data.items()), columns=["Feld", "Wert"])
+        # Excel mit nur KD-ESGG und Kurzbezeichnung erstellen
+        df = pd.DataFrame([{
+            "KD-ESGG": self.data.get('kd_esgg', ''),
+            "Kurzbezeichnung": self.data.get('kurzbezeichnung', '')
+        }])
         excel_io = io.BytesIO()
         with pd.ExcelWriter(excel_io, engine="openpyxl") as writer:
             df.to_excel(writer, sheet_name="ESG-Eingabe", index=False)
             # Spaltenbreiten anpassen
             worksheet = writer.sheets["ESG-Eingabe"]
-            worksheet.column_dimensions['A'].width = 40
-            worksheet.column_dimensions['B'].width = 50
+            worksheet.column_dimensions['A'].width = 20
+            worksheet.column_dimensions['B'].width = 40
         excel_io.seek(0)
         self.excel_content = excel_io.getvalue()
 
@@ -184,10 +256,10 @@ def main():
     bot = st.session_state.bot
     
     # Progress Bar - nur während Eingabe anzeigen
-    if bot.current_field < 15:
-        progress = max(0.0, min(1.0, bot.current_field / 15.0))
+    if bot.current_field < 17:
+        progress = max(0.0, min(1.0, bot.current_field / 17.0))
         st.progress(progress)
-        st.metric("Schritt", f"{bot.current_field + 1} von 15")
+        st.metric("Schritt", f"{bot.current_field + 1} von 17")
     
     # Sidebar
     with st.sidebar:
@@ -196,7 +268,7 @@ def main():
             st.session_state.bot = ESGScoringBot()
             st.rerun()
     
-    if bot.current_field < 15:
+    if bot.current_field < 17:
         field = bot.fields[bot.current_field]
         
         # Ausformulierte Frage anzeigen
@@ -216,6 +288,21 @@ def main():
             # Anzeige des gewählten Datums
             if user_input:
                 st.info(f"✅ Gewähltes Datum: **{user_input}**")
+        # Spezielle Behandlung für Sonstiges mit Datei-Upload
+        elif field['name'] == "sonstiges":
+            st.write("📁 Du kannst hier optional Dateien hochladen (alle Dateitypen erlaubt):")
+            uploaded_files = st.file_uploader(
+                "Dateien hochladen:",
+                accept_multiple_files=True,
+                key=f"upload_{bot.current_field}"
+            )
+            if uploaded_files:
+                bot.uploaded_files = uploaded_files
+                user_input = f"{len(uploaded_files)} Datei(en) hochgeladen"
+                st.success(f"✅ {user_input}")
+            else:
+                user_input = ""
+                st.info("Keine Dateien hochgeladen (optional)")
         else:
             user_input = st.text_input("Ihre Eingabe:", placeholder=field['question'], key=f"input_{bot.current_field}")
         
@@ -267,7 +354,7 @@ def main():
                 st.balloons()
                 st.success("Dokumente bereit!")
             
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
             if bot.word_content:
                 col1.download_button(
                     label="📝 Word",
@@ -281,6 +368,14 @@ def main():
                     data=bot.excel_content,
                     file_name=f"ESG-Eingabe_{datetime.now().strftime('%d%m%Y_%H%M')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            
+            # Email-Link
+            if bot.word_content:
+                mailto_link = bot.generate_email_link()
+                col3.markdown(
+                    f'<a href="{mailto_link}" target="_blank"><button style="width:100%; padding:10px; background-color:#4CAF50; color:white; border:none; border-radius:4px; cursor:pointer; font-weight:bold;">📧 E-Mail öffnen</button></a>',
+                    unsafe_allow_html=True
                 )
         else:
             # Feld wird bearbeitet
@@ -313,6 +408,21 @@ def main():
                     user_input = selected_date.strftime("%d.%m.%Y") if selected_date else ""
                     if user_input:
                         st.info(f"✅ Gewähltes Datum: **{user_input}**")
+                # Spezielle Behandlung für Sonstiges mit Datei-Upload
+                elif field['name'] == "sonstiges":
+                    st.write("📁 Du kannst hier optional Dateien hochladen (alle Dateitypen erlaubt):")
+                    uploaded_files = st.file_uploader(
+                        "Dateien hochladen:",
+                        accept_multiple_files=True,
+                        key=f"upload_edit_{bot.current_field}"
+                    )
+                    if uploaded_files:
+                        bot.uploaded_files = uploaded_files
+                        user_input = f"{len(uploaded_files)} Datei(en) hochgeladen"
+                        st.success(f"✅ {user_input}")
+                    else:
+                        user_input = ""
+                        st.info("Keine Dateien hochgeladen (optional)")
                 else:
                     current_value = bot.data.get(field['name'], "")
                     user_input = st.text_input("Neue Eingabe:", value=current_value, placeholder=field['question'], key="edit_input")
